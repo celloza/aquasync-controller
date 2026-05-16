@@ -1,0 +1,301 @@
+substitutions:
+  name: "aquasync-controller"
+  friendly_name: "AquaSync Pool Controller"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  project:
+    name: "AquaSync.PoolController"
+    version: "1.0.0"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  # CHANGE TO YOUR WIFI CREDENTIALS
+  ssid: "YOUR_WIFI_SSID"
+  password: "YOUR_WIFI_PASSWORD"
+
+  ap:
+    ssid: "Pool Controller Fallback"
+    password: "fallback_password"
+
+captive_portal:
+
+# =========================================
+# ONE-WIRE DALLAS TEMPERATURE SENSORS
+# =========================================
+dallas:
+  - pin: GPIO5
+    update_interval: 15s
+
+sensor:
+  - platform: dallas
+    address: 0x0000000000000000 # Update this after finding your actual sensor address
+    name: "Pool Pre-Heater Temperature"
+    id: pre_heater_temp
+  - platform: dallas
+    address: 0x0000000000000000 # Update this after finding your actual sensor address
+    name: "Pool Post-Heater Temperature"
+    id: post_heater_temp
+
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: receiver_wifi_signal_db
+    unit_of_measurement: dBm
+    icon: mdi:wifi
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  # Current RPM Sensor for iSaver Pump
+  - platform: template
+    name: "Pool Pump Current RPM"
+    id: isaver_freq_inverter_pool_pump_current_rpm
+    icon: "mdi:pump"
+    unit_of_measurement: "RPM"
+    accuracy_decimals: 0
+    update_interval: never
+    force_update: false
+
+# =========================================
+# MODBUS / RS485 UART
+# =========================================
+uart:
+  tx_pin: GPIO17
+  rx_pin: GPIO18
+  baud_rate: 1200
+  stop_bits: 1
+  data_bits: 8
+  parity: NONE
+  id: modbus_uart
+  debug:
+    after:
+      delimiter: "\n"
+
+# =========================================
+# RELAYS
+# =========================================
+switch:
+  - platform: gpio
+    pin: GPIO1
+    id: heater_relay
+    name: "Pool Heater Relay"
+    icon: "mdi:radiator"
+    # Interlock logic: Ensure pump is running when heater is turned on
+    on_turn_on:
+      - if:
+          condition:
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state == 0 || isnan(id(isaver_freq_inverter_pool_pump_current_rpm).state);'
+          then:
+            - switch.turn_on: isaver_freq_inverter_pool_pump_power
+            - delay: 2s # Wait a moment for pump to initialize
+
+  - platform: gpio
+    pin: GPIO2
+    id: light_1_relay
+    name: "Pool Light 1"
+    icon: "mdi:lightbulb"
+
+  - platform: gpio
+    pin: GPIO41
+    id: light_2_relay
+    name: "Pool Light 2"
+    icon: "mdi:lightbulb"
+
+  # Master Switch for Both Lights
+  - platform: template
+    name: "All Pool Lights"
+    icon: "mdi:lightbulb-multiple"
+    turn_on_action:
+      - switch.turn_on: light_1_relay
+      - switch.turn_on: light_2_relay
+    turn_off_action:
+      - switch.turn_off: light_1_relay
+      - switch.turn_off: light_2_relay
+
+  # Optional switches for future use
+  - platform: gpio
+    pin: GPIO42
+    id: relay4
+    name: "Relay 4"
+  - platform: gpio
+    pin: number: GPIO45
+    ignore_strapping_warning: true
+    id: relay5
+    name: "Relay 5"
+  - platform: gpio
+    pin: number: GPIO46
+    ignore_strapping_warning: true
+    id: relay6
+    name: "Relay 6"
+
+  # Pump Power Switch (Turns pump to 2100 RPM or 0)
+  - platform: template
+    name: "Pool Pump Power"
+    id: isaver_freq_inverter_pool_pump_power
+    optimistic: true
+    icon: "mdi:pump"
+    turn_on_action:
+      - lambda: |-
+          id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(2100).perform();
+    turn_off_action:
+      - lambda: |-
+          id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(0).perform();
+
+# =========================================
+# ISAVER MODBUS CONTROL (NUMBER COMPONENT)
+# =========================================
+number:
+  - platform: template
+    name: "Pool Pump Target RPM"
+    id: isaver_freq_inverter_pool_pump_control_rpm
+    min_value: 0
+    max_value: 2900
+    step: 1
+    update_interval: 10s
+    set_action:
+      then:
+        - lambda: |
+            // id(modbus_write_enable).turn_on(); // Uncomment if using a DE/RE pin
+            uint16_t rpm = (uint16_t)x;
+            if (rpm < 1200 && rpm > 0) {
+              rpm = 1200; // Enforce minimum running RPM
+            }
+            uint8_t rpm0 = (rpm >> 8) & 0xFF;
+            uint8_t rpm1 = rpm & 0xFF;
+            uint8_t data[6] = {0xAA, 0xD0, 0x0B, 0xB9, rpm0, rpm1};
+            uint16_t crc = 0xFFFF;
+            for (int i = 0; i < 6; i++) {
+              crc ^= data[i];
+              for (int j = 0; j < 8; j++) {
+                if (crc & 0x0001) {
+                  crc >>= 1;
+                  crc ^= 0xA001;
+                } else {
+                  crc >>= 1;
+                }
+              }
+            }
+            uint8_t crc0 = crc & 0xFF;
+            uint8_t crc1 = (crc >> 8) & 0xFF;
+            uint8_t packet[8] = {0xAA, 0xD0, 0x0B, 0xB9, rpm0, rpm1, crc0, crc1};
+            auto uart = id(modbus_uart);
+            uart->write_array(packet, 8);
+            uart->flush();
+            // id(modbus_write_enable).turn_off(); // Uncomment if using a DE/RE pin
+
+    # Polling logic for target sync (optional, using set RPM for default)
+    lambda: |
+      // id(modbus_write_enable).turn_on(); // Uncomment if using a DE/RE pin
+      uint8_t data[6] = {0xAA, 0xC3, 0x07, 0xD1, 0x00, 0x00};
+      uint16_t crc = 0xFFFF;
+      for (int i = 0; i < 6; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+          if (crc & 0x0001) {
+            crc >>= 1;
+            crc ^= 0xA001;
+          } else {
+            crc >>= 1;
+          }
+        }
+      }
+      uint8_t crc0 = crc & 0xFF;
+      uint8_t crc1 = (crc >> 8) & 0xFF;
+      uint8_t packet[8] = {0xAA, 0xC3, 0x07, 0xD1, 0x00, 0x00, crc0, crc1};
+      auto uart = id(modbus_uart);
+      while(uart->available() > 0) {
+        uint8_t t;
+        uart->read_array(&t, 1);
+      }
+      uart->write_array(packet, 8);
+      uart->flush();
+      // id(modbus_write_enable).turn_off(); // Uncomment if using a DE/RE pin
+      
+      uint32_t start_time = millis();
+      while (uart->available() < 8 && (millis() - start_time) < 200) {
+        delay(1);
+      }
+      if (uart->available() >= 7) {
+        uint8_t response[7];
+        uart->read_array(response, 7);
+        return (float)((uint16_t)response[5] << 8 | (uint16_t)response[6]);
+      } else {
+        return NAN;
+      }
+
+# =========================================
+# MODBUS POLLING INTERVAL
+# =========================================
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          // id(modbus_write_enable).turn_on(); // Uncomment if using a DE/RE pin
+          uint8_t data[6] = {0xAA, 0xC3, 0x07, 0xD1, 0x00, 0x00};
+          uint16_t crc = 0xFFFF;
+          for (int i = 0; i < 6; i++) {
+            crc ^= data[i];
+            for (int j = 0; j < 8; j++) {
+              if (crc & 0x0001) {
+                crc >>= 1;
+                crc ^= 0xA001;
+              } else {
+                crc >>= 1;
+              }
+            }
+          }
+          uint8_t crc0 = crc & 0xFF;
+          uint8_t crc1 = (crc >> 8) & 0xFF;
+          uint8_t packet[8] = {0xAA, 0xC3, 0x07, 0xD1, 0x00, 0x00, crc0, crc1};
+          auto uart = id(modbus_uart);
+          while(uart->available() > 0) {
+            uint8_t t;
+            uart->read_array(&t, 1);
+          }
+          uart->write_array(packet, 8);
+          uart->flush();
+          // id(modbus_write_enable).turn_off(); // Uncomment if using a DE/RE pin
+          
+          uint32_t start_time = millis();
+          while (uart->available() < 8 && (millis() - start_time) < 200) {
+            delay(1);
+          }
+          if (uart->available() >= 7) {
+            uint8_t response[7];
+            uart->read_array(response, 7);
+            
+            float value = (float)((uint16_t)response[5] << 8 | (uint16_t)response[6]);
+            if (value != id(isaver_freq_inverter_pool_pump_current_rpm).state) {
+              id(isaver_freq_inverter_pool_pump_current_rpm).publish_state(value);
+              id(isaver_freq_inverter_pool_pump_control_rpm).publish_state(value);
+            }
+          }
+
+# =========================================
+# CLIMATE CONTROLLER
+# =========================================
+climate:
+  - platform: bang_bang
+    name: "Pool Climate Controller"
+    id: pool_climate
+    sensor: pre_heater_temp
+    default_target_temperature_low: 27 °C
+    default_target_temperature_high: 29 °C
+    heat_action:
+      - switch.turn_on: heater_relay
+    idle_action:
+      - switch.turn_off: heater_relay
