@@ -74,9 +74,11 @@ The iSaver pool pump inverter operates over RS485, but uses a non-standard Modbu
 - Polls the current RPM every 5 seconds.
 
 ### Safety Interlock
-Safety is critical. A pool heater should **never** activate if the pump is off, as stagnant water will boil inside the heater. 
+Safety is critical. A pool heater should **never** activate if the pump is off or running too slowly, as stagnant water will boil inside the heater. 
 
-Whenever the heater relay is commanded on, the firmware checks the pump's current RPM. If the pump is off (`0 RPM`), ESPHome intercepts the action, forces the pump on to 2100 RPM, waits for 2 seconds, and *then* allows the heater to engage.
+This firmware implements a continuous, closed-loop safety interlock:
+- **Pre-Heat Verification:** When heating is requested, the climate controller commands the pump to turn on (if it isn't already) and actively waits until the RPM sensor confirms a safe flow rate (`>= 1200 RPM`) before engaging the heater relay. If the pump fails to reach this threshold within 10 seconds, the sequence aborts and the climate controller is forced off.
+- **Continuous Monitoring:** An emergency shutdown trigger continuously monitors the Modbus RPM polling. If the pump is manually turned down below 1200 RPM or loses power *while* the heater is active, the heater relay is instantly killed and the thermostat is disabled to prevent catastrophic failure.
 
 ### Home Assistant Integration
 The configuration wraps the heating logic into a standard ESPHome `bang_bang` Climate Controller. When imported into Home Assistant, it exposes a native Thermostat card. 

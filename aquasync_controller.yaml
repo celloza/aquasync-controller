@@ -71,6 +71,20 @@ sensor:
     accuracy_decimals: 0
     update_interval: never
     force_update: false
+    on_value:
+      - if:
+          condition:
+            and:
+              - lambda: 'return x < 1200 || isnan(x);'
+              - switch.is_on: heater_relay
+          then:
+            - switch.turn_off: heater_relay
+            - climate.control:
+                id: pool_climate
+                mode: "OFF"
+            - logger.log:
+                level: ERROR
+                format: "Emergency Shutdown: Pump RPM dropped below safe threshold (1200). Heater and Climate disabled!"
 
 # =========================================
 # MODBUS / RS485 UART
@@ -96,14 +110,6 @@ switch:
     id: heater_relay
     name: "Pool Heater Relay"
     icon: "mdi:radiator"
-    # Interlock logic: Ensure pump is running when heater is turned on
-    on_turn_on:
-      - if:
-          condition:
-            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state == 0 || isnan(id(isaver_freq_inverter_pool_pump_current_rpm).state);'
-          then:
-            - switch.turn_on: isaver_freq_inverter_pool_pump_power
-            - delay: 2s # Wait a moment for pump to initialize
 
   - platform: gpio
     pin: GPIO2
@@ -156,8 +162,17 @@ switch:
       - lambda: |-
           id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(2100).perform();
     turn_off_action:
-      - lambda: |-
-          id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(0).perform();
+      - if:
+          condition:
+            lambda: 'return id(heater_relay).state;'
+          then:
+            - switch.turn_on: isaver_freq_inverter_pool_pump_power # Revert switch to ON
+            - logger.log:
+                level: WARN
+                format: "Safety interlock prevented turning off pump power switch while heater is ON."
+          else:
+            - lambda: |-
+                id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(0).perform();
 
 # =========================================
 # ISAVER MODBUS CONTROL (NUMBER COMPONENT)
@@ -175,9 +190,16 @@ number:
         - lambda: |
             // id(modbus_write_enable).turn_on(); // Uncomment if using a DE/RE pin
             uint16_t rpm = (uint16_t)x;
-            if (rpm < 1200 && rpm > 0) {
+            
+            // Safety Check: Do not allow RPM < 1200 if the heater is actively running
+            if (id(heater_relay).state && rpm < 1200) {
+              rpm = 1200;
+              id(isaver_freq_inverter_pool_pump_control_rpm).publish_state(1200);
+              ESP_LOGW("main", "Safety interlock prevented setting pump < 1200 RPM while heater is ON.");
+            } else if (rpm < 1200 && rpm > 0) {
               rpm = 1200; // Enforce minimum running RPM
             }
+            
             uint8_t rpm0 = (rpm >> 8) & 0xFF;
             uint8_t rpm1 = rpm & 0xFF;
             uint8_t data[6] = {0xAA, 0xD0, 0x0B, 0xB9, rpm0, rpm1};
@@ -300,6 +322,26 @@ climate:
     default_target_temperature_low: 27 °C
     default_target_temperature_high: 29 °C
     heat_action:
-      - switch.turn_on: heater_relay
+      - if:
+          condition:
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state < 1200 || isnan(id(isaver_freq_inverter_pool_pump_current_rpm).state);'
+          then:
+            - switch.turn_on: isaver_freq_inverter_pool_pump_power
+      - wait_until:
+          condition:
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state >= 1200;'
+          timeout: 10s
+      - if:
+          condition:
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state >= 1200;'
+          then:
+            - switch.turn_on: heater_relay
+          else:
+            - climate.control:
+                id: pool_climate
+                mode: "OFF"
+            - logger.log:
+                level: ERROR
+                format: "Failed to start heater: Pump RPM did not reach 1200 within timeout."
     idle_action:
       - switch.turn_off: heater_relay
