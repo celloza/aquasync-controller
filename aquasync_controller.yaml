@@ -30,7 +30,7 @@ wifi:
   password: "YOUR_WIFI_PASSWORD"
 
   ap:
-    ssid: "Pool Controller Fallback"
+    ssid: "AquaSync Controller Fallback"
     password: "fallback_password"
 
 captive_portal:
@@ -38,19 +38,21 @@ captive_portal:
 # =========================================
 # ONE-WIRE DALLAS TEMPERATURE SENSORS
 # =========================================
-dallas:
-  - pin: GPIO5
-    update_interval: 15s
+one_wire:
+  - platform: gpio
+    pin: GPIO5
 
 sensor:
-  - platform: dallas
+  - platform: dallas_temp
     address: 0x0000000000000000 # Update this after finding your actual sensor address
     name: "Pool Pre-Heater Temperature"
     id: pre_heater_temp
-  - platform: dallas
+    update_interval: 15s
+  - platform: dallas_temp
     address: 0x0000000000000000 # Update this after finding your actual sensor address
     name: "Pool Post-Heater Temperature"
     id: post_heater_temp
+    update_interval: 15s
 
   - platform: wifi_signal
     name: "WiFi Signal dB"
@@ -132,13 +134,15 @@ switch:
     id: relay4
     name: "Relay 4"
   - platform: gpio
-    pin: number: GPIO45
-    ignore_strapping_warning: true
+    pin:
+      number: GPIO45
+      ignore_strapping_warning: true
     id: relay5
     name: "Relay 5"
   - platform: gpio
-    pin: number: GPIO46
-    ignore_strapping_warning: true
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
     id: relay6
     name: "Relay 6"
 

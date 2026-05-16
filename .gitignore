@@ -1,0 +1,13 @@
+# ESPHome directories
+.esphome/
+**/.esphome/
+
+# Build artifacts
+*.bin
+*.elf
+*.map
+*.hex
+*.bin.gz
+
+# Secrets
+secrets.yaml
