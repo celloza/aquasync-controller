@@ -11,3 +11,4 @@
 
 # Secrets
 secrets.yaml
+.env
