@@ -75,7 +75,7 @@ sensor:
       - if:
           condition:
             and:
-              - lambda: 'return x < 1200 || isnan(x);'
+              - lambda: 'return x < id(safe_min_rpm).state || isnan(x);'
               - switch.is_on: heater_relay
           then:
             - switch.turn_off: heater_relay
@@ -84,7 +84,7 @@ sensor:
                 mode: "OFF"
             - logger.log:
                 level: ERROR
-                format: "Emergency Shutdown: Pump RPM dropped below safe threshold (1200). Heater and Climate disabled!"
+                format: "Emergency Shutdown: Pump RPM dropped below safe threshold. Heater and Climate disabled!"
 
 # =========================================
 # MODBUS / RS485 UART
@@ -179,6 +179,18 @@ switch:
 # =========================================
 number:
   - platform: template
+    name: "Safe Minimum RPM"
+    id: safe_min_rpm
+    icon: "mdi:speedometer"
+    min_value: 1000
+    max_value: 2900
+    step: 50
+    optimistic: true
+    initial_value: 1200
+    restore_value: true
+    entity_category: config
+
+  - platform: template
     name: "Pool Pump Target RPM"
     id: isaver_freq_inverter_pool_pump_control_rpm
     min_value: 0
@@ -191,13 +203,14 @@ number:
             // id(modbus_write_enable).turn_on(); // Uncomment if using a DE/RE pin
             uint16_t rpm = (uint16_t)x;
             
-            // Safety Check: Do not allow RPM < 1200 if the heater is actively running
-            if (id(heater_relay).state && rpm < 1200) {
-              rpm = 1200;
-              id(isaver_freq_inverter_pool_pump_control_rpm).publish_state(1200);
-              ESP_LOGW("main", "Safety interlock prevented setting pump < 1200 RPM while heater is ON.");
-            } else if (rpm < 1200 && rpm > 0) {
-              rpm = 1200; // Enforce minimum running RPM
+            // Safety Check: Do not allow RPM < minimum if the heater is actively running
+            uint16_t min_rpm = (uint16_t)id(safe_min_rpm).state;
+            if (id(heater_relay).state && rpm < min_rpm) {
+              rpm = min_rpm;
+              id(isaver_freq_inverter_pool_pump_control_rpm).publish_state(min_rpm);
+              ESP_LOGW("main", "Safety interlock prevented setting pump < Safe Minimum RPM while heater is ON.");
+            } else if (rpm < min_rpm && rpm > 0) {
+              rpm = min_rpm; // Enforce minimum running RPM
             }
             
             uint8_t rpm0 = (rpm >> 8) & 0xFF;
@@ -324,16 +337,16 @@ climate:
     heat_action:
       - if:
           condition:
-            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state < 1200 || isnan(id(isaver_freq_inverter_pool_pump_current_rpm).state);'
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state < id(safe_min_rpm).state || isnan(id(isaver_freq_inverter_pool_pump_current_rpm).state);'
           then:
             - switch.turn_on: isaver_freq_inverter_pool_pump_power
       - wait_until:
           condition:
-            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state >= 1200;'
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state >= id(safe_min_rpm).state;'
           timeout: 10s
       - if:
           condition:
-            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state >= 1200;'
+            lambda: 'return id(isaver_freq_inverter_pool_pump_current_rpm).state >= id(safe_min_rpm).state;'
           then:
             - switch.turn_on: heater_relay
           else:
@@ -342,6 +355,6 @@ climate:
                 mode: "OFF"
             - logger.log:
                 level: ERROR
-                format: "Failed to start heater: Pump RPM did not reach 1200 within timeout."
+                format: "Failed to start heater: Pump RPM did not reach safe threshold within timeout."
     idle_action:
       - switch.turn_off: heater_relay

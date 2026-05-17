@@ -77,8 +77,9 @@ The iSaver pool pump inverter operates over RS485, but uses a non-standard Modbu
 Safety is critical. A pool heater should **never** activate if the pump is off or running too slowly, as stagnant water will boil inside the heater. 
 
 This firmware implements a continuous, closed-loop safety interlock:
-- **Pre-Heat Verification:** When heating is requested, the climate controller commands the pump to turn on (if it isn't already) and actively waits until the RPM sensor confirms a safe flow rate (`>= 1200 RPM`) before engaging the heater relay. If the pump fails to reach this threshold within 10 seconds, the sequence aborts and the climate controller is forced off.
-- **Continuous Monitoring:** An emergency shutdown trigger continuously monitors the Modbus RPM polling. If the pump is manually turned down below 1200 RPM or loses power *while* the heater is active, the heater relay is instantly killed and the thermostat is disabled to prevent catastrophic failure.
+- **Pre-Heat Verification:** When heating is requested, the climate controller commands the pump to turn on (if it isn't already) and actively waits until the RPM sensor confirms a safe flow rate (`>= Safe Minimum RPM`) before engaging the heater relay. If the pump fails to reach this threshold within 10 seconds, the sequence aborts and the climate controller is forced off.
+- **Continuous Monitoring:** An emergency shutdown trigger continuously monitors the Modbus RPM polling. If the pump is manually turned down below the Safe Minimum RPM or loses power *while* the heater is active, the heater relay is instantly killed and the thermostat is disabled to prevent catastrophic failure.
+- **User Interface Interlock:** The Home Assistant pump RPM slider is restricted; any attempt to turn the pump down below the Safe Minimum RPM while heating is actively occurring will be rejected, instantly snapping the UI back to a safe flow rate. The Safe Minimum RPM itself is exposed as a configurable slider in Home Assistant (defaults to 1200).
 
 ### Home Assistant Integration
 The configuration wraps the heating logic into a standard ESPHome `bang_bang` Climate Controller. When imported into Home Assistant, it exposes a native Thermostat card. 
