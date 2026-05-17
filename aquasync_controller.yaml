@@ -110,6 +110,7 @@ switch:
     id: heater_relay
     name: "Pool Heater Relay"
     icon: "mdi:radiator"
+    internal: true
 
   - platform: gpio
     pin: GPIO2
@@ -358,3 +359,14 @@ climate:
                 format: "Failed to start heater: Pump RPM did not reach safe threshold within timeout."
     idle_action:
       - switch.turn_off: heater_relay
+
+# =========================================
+# DIAGNOSTIC SENSORS
+# =========================================
+binary_sensor:
+  - platform: template
+    name: "Heater Relay Active"
+    id: heater_relay_active
+    icon: "mdi:radiator"
+    lambda: |-
+      return id(heater_relay).state;
