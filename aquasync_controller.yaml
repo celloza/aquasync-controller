@@ -117,21 +117,31 @@ switch:
     id: light_1_relay
     name: "Pool Light 1"
     icon: "mdi:lightbulb"
+    on_turn_on:
+      - logger.log: "Pool Light 1 turned ON"
+    on_turn_off:
+      - logger.log: "Pool Light 1 turned OFF"
 
   - platform: gpio
     pin: GPIO41
     id: light_2_relay
     name: "Pool Light 2"
     icon: "mdi:lightbulb"
+    on_turn_on:
+      - logger.log: "Pool Light 2 turned ON"
+    on_turn_off:
+      - logger.log: "Pool Light 2 turned OFF"
 
   # Master Switch for Both Lights
   - platform: template
     name: "All Pool Lights"
     icon: "mdi:lightbulb-multiple"
     turn_on_action:
+      - logger.log: "Turning ON all pool lights via Master Switch"
       - switch.turn_on: light_1_relay
       - switch.turn_on: light_2_relay
     turn_off_action:
+      - logger.log: "Turning OFF all pool lights via Master Switch"
       - switch.turn_off: light_1_relay
       - switch.turn_off: light_2_relay
 
@@ -160,6 +170,7 @@ switch:
     optimistic: true
     icon: "mdi:pump"
     turn_on_action:
+      - logger.log: "Pump Power Switch turned ON, setting RPM to 2100"
       - lambda: |-
           id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(2100).perform();
     turn_off_action:
@@ -172,6 +183,7 @@ switch:
                 level: WARN
                 format: "Safety interlock prevented turning off pump power switch while heater is ON."
           else:
+            - logger.log: "Pump Power Switch turned OFF, setting RPM to 0"
             - lambda: |-
                 id(isaver_freq_inverter_pool_pump_control_rpm).make_call().set_value(0).perform();
 
@@ -197,6 +209,7 @@ number:
     min_value: 0
     max_value: 2900
     step: 1
+    mode: slider
     update_interval: 10s
     set_action:
       then:
@@ -213,6 +226,8 @@ number:
             } else if (rpm < min_rpm && rpm > 0) {
               rpm = min_rpm; // Enforce minimum running RPM
             }
+            
+            ESP_LOGD("main", "Setting pump target RPM to %d", rpm);
             
             uint8_t rpm0 = (rpm >> 8) & 0xFF;
             uint8_t rpm1 = rpm & 0xFF;
